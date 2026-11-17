@@ -1,0 +1,48 @@
+{
+  "name": "sidecarmaster",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone master and provisioning service for the management sidecars",
+  "scripts": {
+    "dev": "next dev -p 3010",
+    "build": "next build",
+    "start": "next start -p 3010",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "import:soundsuite": "tsx scripts/import-soundsuite.ts",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
+    "@prisma/adapter-better-sqlite3": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "better-sqlite3": "^12.6.0",
+    "dotenv": "^16.4.7",
+    "next": "16.2.4",
+    "nodemailer": "^7.0.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22",
+    "@types/nodemailer": "^6.4.17",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/smtp-server": "^3.5.10",
+    "@types/ws": "^8.18.2",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "16.2.4",
+    "prisma": "7.10.1",
+    "smtp-server": "^3.13.6",
+    "tailwindcss": "^4.1.18",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

@@ -1,0 +1,102 @@
+# sidecarmaster + NetBird + HTTPS (Caddy). Project name: sidecarmaster.
+#   docker compose -p sidecarmaster -f deploy/docker-compose.yml up -d --build
+# Secrets come from sidecarmaster.env (next to this file, never committed):
+#   SM_ADMIN_USERNAME, SM_ADMIN_PASSWORD (first admin), SM_SECRET_KEY.
+# sidecarmaster-net owns the network namespace and the published ports. The app,
+# netbird and caddy join it (network_mode: container:sidecarmaster-net), so the app
+# can restart or be recreated alone and netbird + caddy keep working:
+#   docker compose -p sidecarmaster up -d --no-deps --force-recreate sidecarmaster
+# If sidecarmaster-net itself is recreated, recreate the three that join it too:
+#   docker compose -p sidecarmaster up -d --no-deps --force-recreate sidecarmaster-net sidecarmaster sidecarmaster-netbird sidecarmaster-caddy
+# container: and not service:, because docker compose v2.2.3 (some Windows hosts) fails
+# `up --no-deps <svc>` with "no such service" when the network is service:<other>.
+# The watchdog task SidecarStackWatchdog repairs a stack that lost its network (docs/https-netbird.md).
+services:
+  # Network owner: the namespace, the ports and the DNS name "sidecarmaster".
+  sidecarmaster-net:
+    image: alpine:3.20
+    container_name: sidecarmaster-net
+    init: true
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    mem_limit: 32m
+    ports:
+      - "${SM_HOST_PORT:-3010}:3010"
+      # Sidecar relay for LAN sidecars (192.168.20.x) that cannot reach the NetBird IP. Host 3002 is Sound Suite's.
+      - "${SM_RELAY_LAN_PORT:-3012}:3002"
+      # NetBird WireGuard (UDP). netbird shares this network, so its port is published here.
+      # Container port = Settings > NetBird > Advanced (52001). Host port is 53001 because
+      # Windows (Hyper-V/WinNAT) can reserve UDP 51985-52084 after a reboot; one port that
+      # cannot bind makes Docker drop ALL published ports of this container (2026-11-13).
+      - "${SM_NETBIRD_WG_HOST_PORT:-53001}:${SM_NETBIRD_WG_PORT:-52001}/udp"
+    networks:
+      sidecarmaster:
+        aliases: [sidecarmaster]
+
+  sidecarmaster:
+    build:
+      context: ..
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+    image: sidecarmaster:latest
+    restart: unless-stopped
+    network_mode: "container:sidecarmaster-net"
+    depends_on: [sidecarmaster-net]
+    env_file: [sidecarmaster.env]
+    environment:
+      NETBIRD_CTL_DIR: /netbird-ctl
+      # Phase 2 import (read-only): set SM_SOUNDSUITE_SYSTEM_DB (and SM_SOUNDSUITE_CONFIG_DB,
+      # SM_IMPORT_INTERVAL_MIN) in sidecarmaster.env. Sound Suite's volume is mounted read-only below.
+    volumes:
+      - sidecarmaster-data:/app/data
+      - netbird-ctl:/netbird-ctl
+      - soundsuite-data:/soundsuite:ro
+
+  # NetBird sidecar: joins as {hostname}.vpn.example.com (default sidecarmaster).
+  # Paste the setup key on Settings > NetBird.
+  sidecarmaster-netbird:
+    image: netbirdio/netbird:latest
+    restart: unless-stopped
+    network_mode: "container:sidecarmaster-net"
+    cap_add: [NET_ADMIN, SYS_ADMIN, SYS_RESOURCE]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    entrypoint: ["/bin/bash", "/netbird-entrypoint.sh"]
+    environment:
+      NETBIRD_CTL_DIR: /netbird-ctl
+    volumes:
+      - ../docker/netbird-entrypoint.sh:/netbird-entrypoint.sh:ro
+      - netbird-ctl:/netbird-ctl
+      - netbird-state:/var/lib/netbird
+    depends_on: [sidecarmaster-net]
+
+  # HTTPS sidecar: https://sidecarmaster.vpn.example.com on the NetBird IP (Let's Encrypt via Cloudflare DNS).
+  # Turn it on and paste the Cloudflare token on Settings > NetBird.
+  # Image: docker build -f docker/caddy.Dockerfile -t sidecar-caddy:latest docker (shared, built once per host)
+  sidecarmaster-caddy:
+    image: sidecar-caddy:latest
+    restart: unless-stopped
+    network_mode: "container:sidecarmaster-net"
+    entrypoint: ["/bin/sh", "/caddy-entrypoint.sh"]
+    environment:
+      NETBIRD_CTL_DIR: /netbird-ctl
+      CADDY_UPSTREAM: 127.0.0.1:3010
+    volumes:
+      - ../docker/caddy-entrypoint.sh:/caddy-entrypoint.sh:ro
+      - netbird-ctl:/netbird-ctl
+      - caddy-data:/data
+    depends_on: [sidecarmaster-net]
+
+volumes:
+  sidecarmaster-data:
+  netbird-ctl:
+  netbird-state:
+  caddy-data:
+  # Sound Suite's data volume (other stack). Mounted read-only; never written.
+  soundsuite-data:
+    external: true
+    name: ${SOUNDSUITE_DATA_VOLUME:-soundsuite_soundsuite-data}
+
+networks:
+  sidecarmaster:
+    name: sidecarmaster

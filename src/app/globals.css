@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* The UI is light only. Keep form controls and scrollbars light when the OS is in dark mode. */
+html { color-scheme: light; }
+body { @apply bg-gray-50 text-gray-900; }
+.card { @apply bg-white text-gray-900 rounded-xl border border-gray-200 p-5; }
+.input { @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100; }
+.btn { @apply px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed; }
+.btn-ghost { @apply px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed; }
+
+/* Tables: dense rows, zebra stripes, hover highlight, small upper-case headers. */
+.tbl { @apply w-full text-sm; }
+.tbl th { @apply text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500 bg-gray-50 px-3 py-1.5 border-b border-gray-200 whitespace-nowrap; }
+.tbl td { @apply px-3 py-1.5 border-b border-gray-100 align-top; }
+.tbl tbody tr:nth-child(even) { @apply bg-gray-50/70; }
+.tbl tbody tr:hover { @apply bg-blue-50/60; }
+
+/* Section header inside a card. */
+.h-sec { @apply text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2; }
+
+/* Status chips and dots (colours come from the caller, see src/lib/fleet/card.ts). */
+.pill { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap; }
+.pill-xs { @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border whitespace-nowrap; }
+.dot { @apply inline-block w-2 h-2 rounded-full shrink-0; }

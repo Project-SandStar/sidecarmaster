@@ -1,0 +1,349 @@
+// sidecarmaster data model (SPEC §5.1). Phase 1 + read-only Phase 2 import.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Admin ──────────────────────────────────────────────────────────────
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+  sessions     Session[]
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  at        DateTime @default(now())
+  actor     String
+  action    String
+  target    String?
+  // JSON; secrets are masked before they get here.
+  detail    String?
+
+  @@index([at])
+}
+
+// Key/value settings. Secret values are AES-256-GCM encrypted (SM_SECRET_KEY).
+model Setting {
+  key       String   @id
+  value     String
+  secret    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Fleet ──────────────────────────────────────────────────────────────
+
+model Host {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  os              String?
+  hostOsOverride  String?
+  agentUrl        String?          @unique
+  peerAddress     String?
+  netbirdIp       String?
+  joinedAt        DateTime         @default(now())
+  lastHeartbeatAt DateTime?
+  sidecarVersion  String?
+  // Last status seen by Sound Suite (gpu.sidecars entry: status, mode, containers). JSON, read-only copy.
+  statusSnapshot  String?
+  lastSeenFromIp  String?
+  // Reported hostname, lower case, no ".local". Stable key for merging URLs of one box.
+  hostname        String?
+  // Last live status from the relay (version, mode, gpus, containers). JSON, compact.
+  liveStatus      String?
+  labels          String           @default("{}")
+  note            String?
+  // 'soundsuite-import' | 'join' | 'manual'
+  source          String           @default("manual")
+  // Phase 3 control: desired-policy revision, last pushed revision, drift healing switch.
+  policyRev        Int             @default(1)
+  pushedPolicyRev  Int             @default(0)
+  lastConfigPushAt DateTime?
+  reconcileEnabled Boolean         @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  apps            HostApp[]
+  roles           RoleAssignment[]
+  aliases         HostAlias[]
+  commands        Command[]
+
+  @@index([hostname])
+}
+
+/// Every sidecar URL a host was seen under (DHCP moves, LAN vs NetBird). Host.agentUrl is the last one.
+model HostAlias {
+  id        String   @id @default(cuid())
+  hostId    String
+  host      Host     @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  url       String   @unique
+  // 'soundsuite-import' | 'relay'
+  source    String   @default("soundsuite-import")
+  firstSeen DateTime @default(now())
+  lastSeen  DateTime @default(now())
+
+  @@index([hostId])
+}
+
+/// HTTP fallback command queue (Sound Suite's SidecarCommand, plus hostId/appId/requestedBy).
+model Command {
+  id          String   @id @default(uuid())
+  hostId      String?
+  host        Host?    @relation(fields: [hostId], references: [id], onDelete: SetNull)
+  sidecarUrl  String
+  appId       String   @default("sidecarmaster")
+  action      String
+  payload     String   @default("{}")
+  // pending | delivered | completed | failed | expired
+  status      String   @default("pending")
+  result      String?
+  requestedBy String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  expiresAt   DateTime
+
+  @@index([sidecarUrl, status])
+  @@index([status, expiresAt])
+}
+
+model App {
+  id          String           @id
+  displayName String
+  masterUrl   String?
+  wsUrl       String?
+  protocol    String           @default("none")
+  enabled     Boolean          @default(true)
+  // HTTP health probe (apps with protocol 'none').
+  probeUrl    String?
+  // Public API token (Phase 3.5): sha256 of the token, last 4 chars, JSON scopes.
+  apiTokenHash String?         @unique
+  apiTokenHint String?
+  apiScopes    String          @default("[]")
+  apiTokenAt   DateTime?
+  // Token sidecars use to dial this app's master. AES-256-GCM (SM_SECRET_KEY).
+  sidecarTokenEnc String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  modes       AppMode[]
+  hosts       HostApp[]
+  roles       RoleAssignment[]
+}
+
+// A role type: one mode of one app (Sound Suite's mode catalog becomes app 'soundsuite').
+model AppMode {
+  id           String   @id @default(cuid())
+  appId        String
+  app          App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  name         String
+  label        String?
+  description  String?
+  // JSON array of host OS kinds, e.g. ["linux","windows-docker-wsl2"]
+  availableOn  String   @default("[]")
+  image        String?
+  port         Int?
+  requiresGpu  Boolean  @default(true)
+  vramMb       Int?
+  runtimes     String   @default("[]")
+  env          String   @default("{}")
+  defaultModel String?
+  // 'ollama' | 'vllm' | 'utility'
+  kind          String  @default("ollama")
+  // JSON { linux?: model, "mac-docker-ollama"?: model, "windows-docker-wsl2"?: model }
+  defaultModels String  @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([appId, name])
+}
+
+// Host provisioning per app (replaces HostProvisioning.masterUrlForHost/masterWsPortForHost).
+model HostApp {
+  id                String   @id @default(cuid())
+  hostId            String
+  host              Host     @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  appId             String
+  app               App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  enabled           Boolean  @default(true)
+  masterUrlOverride String?
+  wsPortOverride    Int?
+  authTokenRef      String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([hostId, appId])
+}
+
+model RoleAssignment {
+  id             String   @id @default(cuid())
+  hostId         String
+  host           Host     @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  mode           String
+  enabled        Boolean  @default(true)
+  minOnline      Int      @default(0)
+  idleTimeoutMin Int      @default(5)
+  modelOverride  String?
+  runtime        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([hostId, appId, mode])
+}
+
+// Reconcile loop memory: one row per (host, app, mode) it tried to fix.
+model ReconcileState {
+  id        String   @id @default(cuid())
+  hostId    String
+  appId     String
+  mode      String
+  action    String
+  tries     Int      @default(0)
+  lastTryAt DateTime @default(now())
+  lastError String?
+  gaveUp    Boolean  @default(false)
+
+  @@unique([hostId, appId, mode])
+}
+
+model ImportRun {
+  id        String   @id @default(cuid())
+  at        DateTime @default(now())
+  source    String
+  dryRun    Boolean
+  // JSON report (counts, warnings). No secrets.
+  report    String
+}
+
+// ─── Releases (update feed) ─────────────────────────────────────────────
+
+model Release {
+  id        String   @id @default(cuid())
+  product   String
+  platform  String
+  channel   String   @default("stable")
+  version   String
+  build     Int
+  url       String
+  sha256    String
+  notes     String?
+  minOS     String?
+  // 'upload' | 'gitlab' | 'github' | 'manual'
+  source    String   @default("manual")
+  // Local file (data/releases/...) when sidecarmaster serves the download itself.
+  filePath  String?
+  fileName  String?
+  size      Int?
+  gitlabTag String?
+  // Who gets it from the feed: 'all' | 'hosts' (ReleaseHost rows) | 'none' (held back / withdrawn).
+  rollout   String   @default("all")
+  createdBy String?
+  createdAt DateTime @default(now())
+  hosts     ReleaseHost[]
+
+  @@unique([product, platform, channel, build])
+  @@index([product, platform, channel])
+}
+
+// Rollout to single hosts (Release.rollout = 'hosts'). The feed matches ?host=<host id or name>.
+model ReleaseHost {
+  id        String   @id @default(cuid())
+  releaseId String
+  release   Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  hostId    String
+  createdAt DateTime @default(now())
+
+  @@unique([releaseId, hostId])
+}
+
+// ─── Phase 5: samples and alerts ────────────────────────────────────────
+
+// One row per host per 60 s (7-day ring).
+model HeartbeatSample {
+  id                String   @id @default(cuid())
+  hostId            String
+  at                DateTime
+  online            Boolean
+  activeRequests    Int?
+  vramUsedMb        Int?
+  vramTotalMb       Int?
+  gpuUtilPct        Float?
+  diskFreePct       Float?
+  containersRunning Int?
+
+  @@index([hostId, at])
+  @@index([at])
+}
+
+// One row per host per hour, made from the samples (kept 90 days).
+model HeartbeatHourly {
+  id                String   @id @default(cuid())
+  hostId            String
+  hour              DateTime
+  samples           Int
+  onlineSamples     Int
+  avgActiveRequests Float?
+  maxActiveRequests Int?
+  maxVramPct        Float?
+  minDiskFreePct    Float?
+
+  @@unique([hostId, hour])
+  @@index([hour])
+}
+
+model Alert {
+  id         String    @id @default(cuid())
+  // Stable key of the condition, e.g. "host-down:<hostId>".
+  key        String
+  rule       String
+  severity   String    @default("warning")
+  // 'open' | 'ack' | 'closed'
+  state      String    @default("open")
+  hostId     String?
+  appId      String?
+  message    String
+  openedAt   DateTime  @default(now())
+  ackedAt    DateTime?
+  ackedBy    String?
+  closedAt   DateTime?
+  muted      Boolean   @default(false)
+  notifiedAt DateTime?
+
+  @@index([key, state])
+  @@index([state, openedAt])
+}
+
+// Mute a rule, a host, an app, or a mix, until a time.
+model AlertMute {
+  id        String   @id @default(cuid())
+  rule      String?
+  hostId    String?
+  appId     String?
+  until     DateTime
+  reason    String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([until])
+}
